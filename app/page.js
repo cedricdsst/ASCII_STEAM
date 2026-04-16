@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const DEFAULT_MAX_TOTAL_CHARS = 1000;
 const STEAM_MAX_LINE_WIDTH = 68;
@@ -284,6 +284,7 @@ export default function HomePage() {
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [copyStatus, setCopyStatus] = useState("");
+  const generationTokenRef = useRef(0);
 
   const maxLines = useMemo(
     () => computeMaxLines(lineWidth, maxChars, STEAM_NEWLINE_COST),
@@ -348,18 +349,18 @@ export default function HomePage() {
     return () => window.removeEventListener("paste", onPaste);
   }, [setImageFile]);
 
-  const onGenerate = async () => {
-    if (!file) {
-      setError("Ajoute, colle, ou depose une image.");
+  const runGeneration = useCallback(async (sourceFile) => {
+    if (!sourceFile) {
       return;
     }
 
+    const generationToken = generationTokenRef.current + 1;
+    generationTokenRef.current = generationToken;
     setIsLoading(true);
     setError("");
-    setCopyStatus("");
 
     try {
-      const result = await convertImageToBraille(file, {
+      const result = await convertImageToBraille(sourceFile, {
         lineWidth,
         maxChars,
         contrast,
@@ -373,20 +374,57 @@ export default function HomePage() {
         setError("Aucun resultat genere. Essaie une autre image.");
       }
 
+      if (generationTokenRef.current !== generationToken) {
+        return;
+      }
       setAscii(result.ascii);
       setUsedWidth(result.usedWidth);
       setUsedLines(result.usedLines);
       setUsedChars(result.usedChars);
     } catch (generationError) {
+      if (generationTokenRef.current !== generationToken) {
+        return;
+      }
       setAscii("");
       setUsedWidth(0);
       setUsedLines(0);
       setUsedChars(0);
       setError(generationError.message || "Erreur pendant la generation.");
     } finally {
-      setIsLoading(false);
+      if (generationTokenRef.current === generationToken) {
+        setIsLoading(false);
+      }
     }
-  };
+  }, [
+    contrast,
+    emptyCellMode,
+    invertBinary,
+    lineWidth,
+    maxChars,
+    steamProtectAsciiSpaces,
+    threshold
+  ]);
+
+  const onGenerate = useCallback(() => {
+    if (!file) {
+      setError("Ajoute, colle, ou depose une image.");
+      return;
+    }
+    setCopyStatus("");
+    void runGeneration(file);
+  }, [file, runGeneration]);
+
+  useEffect(() => {
+    if (!file) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      void runGeneration(file);
+    }, 120);
+
+    return () => clearTimeout(timer);
+  }, [file, runGeneration]);
 
   const onCopy = async () => {
     if (!ascii) {
@@ -553,6 +591,7 @@ export default function HomePage() {
           {" "}
           <strong>{maxLines}</strong>
         </div>
+        <div className="hint">Regeneration automatique active pendant les reglages.</div>
         {usedWidth > 0 ? (
           <div className="hint">
             Auto-fit applique:
@@ -563,8 +602,8 @@ export default function HomePage() {
           </div>
         ) : null}
 
-        <button type="button" onClick={onGenerate} disabled={isLoading}>
-          {isLoading ? "Generation..." : "Generer ASCII"}
+        <button type="button" onClick={onGenerate} disabled={isLoading || !file}>
+          {isLoading ? "Generation..." : "Regenerer maintenant"}
         </button>
 
         {error ? <p className="error">{error}</p> : null}
